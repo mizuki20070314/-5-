@@ -122,16 +122,23 @@ void sendTCP(bool swing, bool founds[], int rssis[], int num_targets) {
     Serial.println("TCP connect failed");
     return;
   }
-
   // JSON配列形式で送信
-  String json = String("{\"swing\":") + (swing?1:0) + ",\"devices\":[";
-  for (int i = 0; i < num_targets; i++) {
-    json += String("{\"mac\":\"") + targetAddresses[i] + "\",\"rssi\":" + rssis[i] + ",\"found\":" + (founds[i]?1:0) + "}";
-    if (i < num_targets - 1) json += ",";
+  //{swing:1,id:1,rssi:-50,found:1}
+  for (int i = 0; i < num_targets; i++){
+    String json = String("{\"swing\":") + (swing ? 1 : 0)
+                        + ",\"id\":";
+    if (targetAddresses[i] == "58:8c:81:9d:b8:de"){
+      json += 1;
+    }
+    else if (targetAddresses[i] == "aa:bb:cc:dd:ee:ff"){
+      json += 2;
+    }
+    json += String(",\"rssi\":") + rssis[i]
+                 + ",\"found\":" + (founds[i] ? 1 : 0)
+                 + "}";
+    client.println(json);
   }
-  json += "]}";
-
-  client.println(json);
+  
   Serial.print("Sent: ");
   Serial.println(json);
 
