@@ -50,6 +50,13 @@ BLEScan* scan;
 // BLE スキャンタスクの関数プロトタイプ
 void bleScanTask(void *pvParameters);
 
+// LEDを滑らかに消灯する用
+bool isFading = false;
+int valBright;
+int MAX_BRIGHTNESS = 85;     //バッテリーの最大電流を超えないように調整
+int reduced = 0;
+unsigned long fedStart;
+
 // --------------------------------------------------
 // BLE スキャン結果コールバック
 // --------------------------------------------------
@@ -107,6 +114,24 @@ bool CheckMotion() {
 }
 
 // --------------------------------------------------
+// LEDフェードアウト処理
+// --------------------------------------------------
+void fadeOut(void){
+  if(isFading){
+    //1秒間で5回に分けてフェードアウトする
+    if(millis() - fedStart > 200*reduced){
+      valBright -= MAX_BRIGHTNESS/5;
+      pixels.setBrightness(valBright);
+      pixels.show();
+      reduced += 1;
+      if(reduced == 5){
+        isFading = false;
+      }
+    }
+  }
+}
+
+// --------------------------------------------------
 // TCP送信
 // --------------------------------------------------
 void sendTCP(bool swing, bool founds[], int rssis[], int num_targets) {
@@ -142,10 +167,16 @@ void sendTCP(bool swing, bool founds[], int rssis[], int num_targets) {
   Serial.print("Sent: ");
   Serial.println(json);
 
+  //開始時間を保存
   unsigned long start = millis();
   String response = "";
 
+  //0.5秒間はサーバーからの返信を待つ
   while (millis() - start < 500) {
+
+    //平行してLEDフェードアウト処理を行う
+    fadeOut();
+
     if (client.available()) {
       response = client.readStringUntil('\n');
       break;
@@ -158,15 +189,28 @@ void sendTCP(bool swing, bool founds[], int rssis[], int num_targets) {
   for(int i = 0;i < 10;i++) {
     if (led == 1) {
       pixels.setPixelColor(i, pixels.Color(0, 255, 0));
+      valBright = MAX_BRIGHTNESS;
+      pixels.setBrightness(valBright);
+      isFading = true;
     } else if (led == 2) {
       pixels.setPixelColor(i, pixels.Color(255, 255, 0));
+      valBright = MAX_BRIGHTNESS;
+      pixels.setBrightness(valBright);
+      isFading = true;
     } else if (led == 3){
       pixels.setPixelColor(i, pixels.Color(255, 0, 0));
+      valBright = MAX_BRIGHTNESS;
+      pixels.setBrightness(valBright);
+      isFading = true;
     }
   }
 
   if (led == 4) {
-    pixels.clear();
+    isFading = true;
+    fedStart = millis();
+    valBright -= MAX_BRIGHTNESS/5;
+    pixels.setBrightness(valBright);
+    reduced = 1;
   } else if (led == 5) {
     flag = !flag;
   } else if (led != 0 && led != 1 && led != 2){
@@ -225,6 +269,9 @@ void setup() {
 // --------------------------------------------------
 void loop() {
   CheckMotion();
+
+  //平行してLEDフェードアウト処理を行う
+  fadeOut();
 
   if (isWaving || flag == true) {
     sendTCP(isWaving, foundTarget, lastRSSI, NUM_TARGETS);
