@@ -37,6 +37,8 @@ Adafruit_NeoPixel pixels(10, D10, NEO_GRB + NEO_KHZ800);
 // 加速度関連
 bool isWaving = false;
 bool flag = true;
+bool isLighting = false;
+unsigned long circleStart;
 
 // BLE スキャン結果（複数デバイス分）
 volatile bool foundTarget[NUM_TARGETS];
@@ -48,12 +50,13 @@ const uint32_t SCAN_INTERVAL = 100;
 BLEScan* scan;
 
 // BLE スキャンタスクの関数プロトタイプ
-void bleScanTask(void *pvParameters);
+void bleScanTask(void* pvParameters);
 
 // LEDを滑らかに消灯する用
 bool isFading = false;
 int valBright;
-int MAX_BRIGHTNESS = 85;     //バッテリーの最大電流を超えないように調整
+int MAX_BRIGHTNESS = 85;  //バッテリーの最大電流を超えないように調整
+int FadeoutTimes = 5;
 int reduced = 0;
 unsigned long fedStart;
 
@@ -76,25 +79,25 @@ class ScanCallback : public BLEAdvertisedDeviceCallbacks {
 // --------------------------------------------------
 // BLE スキャンタスク (FreeRTOSタスク)
 // --------------------------------------------------
-void bleScanTask(void *pvParameters) {
-    for (;;) {
-        // スキャン前に結果をリセット
-        for (int i = 0; i < NUM_TARGETS; i++) {
-          foundTarget[i] = false;
-          lastRSSI[i] = -127;
-        }
-
-        Serial.println("[BLE Task] Start scan...");
-        scan->start(SCAN_DURATION / 1000, false); 
-        vTaskDelay(pdMS_TO_TICKS(SCAN_DURATION)); 
-        scan->stop();
-
-        for (int i = 0; i < NUM_TARGETS; i++) {
-          Serial.printf("[BLE Task] Target %d: Found=%s, RSSI=%d\n", i, foundTarget[i] ? "Yes" : "No", lastRSSI[i]);
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(SCAN_INTERVAL));
+void bleScanTask(void* pvParameters) {
+  for (;;) {
+    // スキャン前に結果をリセット
+    for (int i = 0; i < NUM_TARGETS; i++) {
+      foundTarget[i] = false;
+      lastRSSI[i] = -127;
     }
+
+    Serial.println("[BLE Task] Start scan...");
+    scan->start(SCAN_DURATION / 1000, false);
+    vTaskDelay(pdMS_TO_TICKS(SCAN_DURATION));
+    scan->stop();
+
+    for (int i = 0; i < NUM_TARGETS; i++) {
+      Serial.printf("[BLE Task] Target %d: Found=%s, RSSI=%d\n", i, foundTarget[i] ? "Yes" : "No", lastRSSI[i]);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(SCAN_INTERVAL));
+  }
 }
 
 // --------------------------------------------------
@@ -116,16 +119,17 @@ bool CheckMotion() {
 // --------------------------------------------------
 // LEDフェードアウト処理
 // --------------------------------------------------
-void fadeOut(void){
-  if(isFading){
-    //1秒間で5回に分けてフェードアウトする
-    if(millis() - fedStart > 200*reduced){
-      valBright -= MAX_BRIGHTNESS/5;
+void fadeOut(void) {
+  if (isFading) {
+    //1秒間で FadeoutTimes 回に分けてフェードアウトする
+    if (millis() - fedStart > (1000/FadeoutTimes) * reduced) {
+      valBright -= MAX_BRIGHTNESS / FadeoutTimes;
       pixels.setBrightness(valBright);
       pixels.show();
-      reduced += 1;
-      if(reduced == 5){
+      reduced += 1;  //明るさを下げた回数
+      if (reduced >= FadeoutTimes) {
         isFading = false;
+        isLighting = false;
       }
     }
   }
@@ -151,19 +155,13 @@ void sendTCP(bool swing, bool founds[], int rssis[], int num_targets) {
   //{swing:1,id:1,rssi:-50,found:1}
   for (int i = 0; i < num_targets; i++){
     String json = String("{\"swing\":") + (swing ? 1 : 0)
-                        + ",\"id\":";
-    if (targetAddresses[i] == "58:8c:81:9d:b8:de"){
-      json += 1;
-    }
-    else if (targetAddresses[i] == "aa:bb:cc:dd:ee:ff"){
-      json += 2;
-    }
-    json += String(",\"rssi\":") + rssis[i]
-                 + ",\"found\":" + (founds[i] ? 1 : 0)
-                 + "}";
+                        + (",\"id\":") + (i + 1)
+                        + (",\"rssi\":") + (rssis[i])
+                        + (",\"found\":") + (founds[i] ? 1 : 0)
+                        + ("}");
     client.println(json);
   }
-  
+
   Serial.print("Sent: ");
   Serial.println(json);
 
@@ -186,34 +184,44 @@ void sendTCP(bool swing, bool founds[], int rssis[], int num_targets) {
   int led = response.toInt();
   Serial.printf("Server returned: %d\n", led);
 
-  for(int i = 0;i < 10;i++) {
+  for (int i = 0; i < 10; i++) {
+    if (flag == false && isLighting == false) {
+      circleStart = millis();
+      isLighting = true;  // フラグ：現在同心円状に発光中
+    }
+
     if (led == 1) {
-      pixels.setPixelColor(i, pixels.Color(0, 255, 0));
-      valBright = MAX_BRIGHTNESS;
-      pixels.setBrightness(valBright);
-      isFading = true;
+      if (isLighting == false || millis() - circleStart > 700 * led) {
+        pixels.setPixelColor(i, pixels.Color(0, 255, 0));
+        valBright = MAX_BRIGHTNESS;
+        pixels.setBrightness(valBright);
+      }
     } else if (led == 2) {
-      pixels.setPixelColor(i, pixels.Color(255, 255, 0));
-      valBright = MAX_BRIGHTNESS;
-      pixels.setBrightness(valBright);
-      isFading = true;
-    } else if (led == 3){
-      pixels.setPixelColor(i, pixels.Color(255, 0, 0));
-      valBright = MAX_BRIGHTNESS;
-      pixels.setBrightness(valBright);
-      isFading = true;
+      if (isLighting == false || millis() - circleStart > 700 * led) {
+        pixels.setPixelColor(i, pixels.Color(255, 255, 0));
+        valBright = MAX_BRIGHTNESS;
+        pixels.setBrightness(valBright);
+      }
+    } else if (led == 3) {
+      if (isLighting == false || millis() - circleStart > 700 * led) {
+        pixels.setPixelColor(i, pixels.Color(255, 0, 0));
+        valBright = MAX_BRIGHTNESS;
+        pixels.setBrightness(valBright);
+      }
     }
   }
 
   if (led == 4) {
-    isFading = true;
-    fedStart = millis();
-    valBright -= MAX_BRIGHTNESS/5;
-    pixels.setBrightness(valBright);
-    reduced = 1;
+    if (isFading == false) {
+      isFading = true;
+      fedStart = millis();
+      valBright -= MAX_BRIGHTNESS / FadeoutTimes;
+      pixels.setBrightness(valBright);
+      reduced = 1;  //明るさを下げた回数
+    }
   } else if (led == 5) {
     flag = !flag;
-  } else if (led != 0 && led != 1 && led != 2){
+  } else if (led != 0 && led != 1 && led != 2) {
     Serial.printf("Failed to parse JSON\n");
   }
 
@@ -233,7 +241,8 @@ void setup() {
 
   if (!accel.begin()) {
     Serial.println("ADXL345 not detected!");
-    while (1);
+    while (1)
+      ;
   }
   accel.setRange(ADXL345_RANGE_16_G);
 
@@ -244,24 +253,24 @@ void setup() {
     Serial.print(".");
   }
   Serial.println("\nWiFi connected");
-  Serial.print("IP: "); Serial.println(WiFi.localIP());
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
 
   BLEDevice::init("");
   scan = BLEDevice::getScan();
-  scan->setAdvertisedDeviceCallbacks(new ScanCallback(), true); 
+  scan->setAdvertisedDeviceCallbacks(new ScanCallback(), true);
   scan->setActiveScan(true);
   scan->setInterval(90);
   scan->setWindow(45);
 
   xTaskCreatePinnedToCore(
-      bleScanTask,
-      "BLEScanTask",
-      4096,
-      NULL,
-      1,
-      NULL,
-      0
-  );
+    bleScanTask,
+    "BLEScanTask",
+    4096,
+    NULL,
+    1,
+    NULL,
+    0);
 }
 
 // --------------------------------------------------
