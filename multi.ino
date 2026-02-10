@@ -151,6 +151,7 @@ void sendTCP(bool swing, bool founds[], int rssis[], int num_targets) {
     Serial.println("TCP connect failed");
     return;
   }
+  
   // JSON配列形式で送信
   //{swing:1,id:1,rssi:-50,found:1}
   for (int i = 0; i < num_targets; i++){
@@ -290,3 +291,4 @@ void loop() {
 
   delay(10);
 }
+
