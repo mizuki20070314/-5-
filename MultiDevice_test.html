@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Nexarea Infinite Radar</title>
+<style>
+/* 全体設定 */
+body {
+  font-family: 'Courier New', monospace;
+  background: #0d0d0d;
+  color: #00eaff;
+  text-align: center;
+  margin: 0;
+  padding: 20px;
+}
+h2 {
+  text-shadow: 0 0 10px #00eaff;
+  margin-bottom: 5px;
+}
+
+/* レーダー画面設定 */
+#radarBox {
+  position: relative;
+  width: 400px;
+  height: 400px;
+  margin: 30px auto;
+  background: radial-gradient(circle, #222 0%, #111 90%);
+  border-radius: 50%;
+  border: 2px solid #333;
+  box-shadow: 0 0 20px rgba(0, 234, 255, 0.1);
+  overflow: hidden;
+}
+
+/* グリッド線 */
+.grid-circle {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  border: 1px dashed #444;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.c-1 { width: 130px; height: 130px; }
+.c-2 { width: 260px; height: 260px; }
+
+/* 中心点 (受信機) */
+.center-point {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 12px; height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 15px #fff;
+  z-index: 10;
+}
+
+/* 自動生成されるデバイスのスタイル */
+.device-node {
+  position: absolute;
+  width: 30px; height: 30px;
+  background: rgba(0,0,0,0.8);
+  border: 2px solid #00eaff;
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 10px;
+  font-weight: bold;
+  
+  /* 初期位置は中心 */
+  top: 50%; left: 50%;
+  margin-top: -15px; /* 高さの半分 */
+  margin-left: -15px; /* 幅の半分 */
+  
+  transition: transform 0.5s ease, opacity 0.5s;
+  z-index: 5;
+  cursor: pointer;
+}
+
+/* ホバー時にMACアドレスを表示 */
+.device-node:hover::after {
+  content: attr(data-mac);
+  position: absolute;
+  top: -25px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #00eaff;
+  color: #000;
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+</style>
+</head>
+<body>
+
+<h2>NEXAREA INFINITE RADAR</h2>
+<div style="font-size:12px; color:#666;">Auto-detecting devices via MAC Address</div>
+
+<div id="radarBox">
+  <div class="grid-circle c-1"></div>
+  <div class="grid-circle c-2"></div>
+  <div class="center-point"></div>
+  </div>
+
+<div id="log" style="color:#555; font-size:12px; margin-top:10px;">Waiting for signal...</div>
+
+<script>
+// --- 変数定義 ---
+// devices: 発見したデバイスの情報をMACアドレスをキーとして保存
+const devices = {};
+let deviceCount = 0;
+
+// --- メインループ ---
+async function loadData() {
+    try {
+        const response = await fetch("received_data.txt?nocache=" + Date.now());
+        if (!response.ok) throw new Error();
+        const text = await response.text();
+
+        // JSONパース (IDが文字列(MAC)になったことに対応)
+        // データ形式例: {"id":"24:6F:...", "rssi":-60, ...}
+        const macMatch = text.match(/"id"\s*:\s*"([^"]+)"/); 
+        const rssiMatch = text.match(/"rssi"\s*:\s*([-\d]+)/);
+
+        if (macMatch && rssiMatch) {
+            const mac = macMatch[1];
+            const rssi = parseInt(rssiMatch[1]);
+            const now = Date.now();
+
+            // 初めて見るMACアドレスなら登録
+            if (!devices[mac]) {
+                registerNewDevice(mac);
+            }
+
+            // データを更新
+            devices[mac].rssi = rssi;
+            devices[mac].lastUpdate = now;
+            
+            document.getElementById("log").innerText = `Last recv: ${mac} (${rssi}dBm)`;
+        }
+    } catch (e) { 
+        // 読み込みエラー時は何もしない
+    }
+
+    // 画面の更新
+    updateRadar();
+}
+
+// --- 新規デバイス登録関数 ---
+function registerNewDevice(mac) {
+    deviceCount++;
+    
+    // HTML要素を作成
+    const el = document.createElement("div");
+    el.className = "device-node";
+    el.innerText = deviceCount; // 1, 2, 3... という番号を表示
+    el.setAttribute("data-mac", mac); // ホバー用にMACアドレスを埋め込む
+    
+    // 画面に追加
+    document.getElementById("radarBox").appendChild(el);
+
+    // リストに保存
+    devices[mac] = {
+        rssi: -120, // 初期値は遠く
+        lastUpdate: Date.now(),
+        element: el,
+        index: deviceCount - 1
+    };
+    
+    console.log("New Device Found:", mac);
+}
+
+// --- 描画更新関数 ---
+function updateRadar() {
+    const maxRadius = 180; // レーダー半径
+    const now = Date.now();
+
+    // 全デバイスをループ処理
+    Object.keys(devices).forEach(mac => {
+        const dev = devices[mac];
+
+        // 1. 距離計算 (-30dBm〜-100dBm を 0〜1 に変換)
+        let distRatio = (dev.rssi - (-30)) / (-100 - (-30));
+        if (distRatio < 0) distRatio = 0; 
+        if (distRatio > 1) distRatio = 1;
+        const pxDist = distRatio * maxRadius;
+
+        // 2. 角度計算 (デバイスが増えるたびに少しずつずらす)
+        // 例: 60度ずつずらす
+        const angleDeg = dev.index * 60; 
+        const angleRad = (angleDeg - 90) * (Math.PI / 180);
+
+        // 3. 座標計算
+        const x = Math.cos(angleRad) * pxDist;
+        const y = Math.sin(angleRad) * pxDist;
+
+        // 4. 移動
+        dev.element.style.transform = `translate(${x}px, ${y}px)`;
+
+        // 5. 生存確認 (5秒以上更新がなければ薄くする)
+        if (now - dev.lastUpdate > 5000) {
+            dev.element.style.opacity = 0.3;
+            dev.element.style.borderColor = "#444";
+        } else {
+            dev.element.style.opacity = 1.0;
+            dev.element.style.borderColor = "#00eaff";
+        }
+    });
+}
+
+// 0.1秒ごとに実行
+setInterval(loadData, 100);
+</script>
+</body>
+</html>
